@@ -1,0 +1,161 @@
+---
+title: "Practical Machine Learning - Prediction Assignment Writeup"
+author: "Djoko Soehartono"
+date: "August 17, 2016"
+output: html_document
+---
+
+## Background and Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The goal of this project is to predict the manner in which the participants did the exercise. This is the classe variable of the training set, which classifies the correct and incorrect outcomes into A, B, C, D, and E categories. This report describes how the model for the project was built, its cross validation, expected out of sample error calculation, and the choices made. It was used successfully to accurately predict all 20 different test cases on the Coursera website.
+
+This document is the final report of the Peer Assessment project from Coursera's course Practical Machine Learning, as part of the Specialization in Data Science. It was built up in RStudio, using its knitr functions, meant to be published in html format.
+
+## Data Loading and Exploratory Analysis
+### Dataset Overview
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+Full source: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. *"Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)"*. Stuttgart, Germany: ACM SIGCHI, 2013.
+
+My special thanks to the above mentioned authors in allowing their data to be used for this assignment.
+
+A short description of the datasets content from the authors' website:
+
+"Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg)."
+
+### Data Loading and Cleaning
+We first upload the R libraries that are necessary for the complete analysis.
+```{r warning=FALSE, message=FALSE}
+setwd("D:/Ayah/Data_Science/08_Practical_Machine_Learning")
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(corrplot)
+library(e1071)
+set.seed(11223)
+```
+
+The next step is downloading the dataset from the URL provided above and load to RStudio.
+```{r}
+# read the csv files and interpreting the miscellaneous NA, #DIV/0! and empty fields as NA
+training <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+testing  <- read.csv("pml-testing.csv",  na.strings = c("NA", "#DIV/0!", ""))
+```
+
+Let's first do some basic data clean-up by removing columns 1 to 6, which are there just for information and reference purposes and then removing all columns that are mostly NA:
+```{r}
+# removing first 6 columns
+training <- training[, 7:160]
+testing  <- testing[, 7:160]
+dim(training)
+dim(testing)
+
+# removing columns that are mostly NA
+AllNA    <- sapply(training, function(x) mean(is.na(x))) > 0.95
+training <- training[ ,!AllNA]
+testing  <- testing[ ,!AllNA]
+dim(training)
+dim(testing)
+```
+
+The training dataset is then partinioned in 2 to create a Training set (60% of the data) for the modeling process and a Test set (with the remaining 40%) for the validations. The testing dataset is not changed and will only be used for the quiz results generation.
+```{r}
+# create a partition with the training dataset 
+inTrain  <- createDataPartition(training$classe, p=0.6, list=FALSE)
+TrainSet <- training[inTrain, ]
+TestSet  <- training[-inTrain, ]
+dim(TrainSet)
+dim(TestSet)
+```
+
+At this stage, TrainSet is the training data set (it contains 11776 observations, or about 60% of the entire training data set), and TestSet is the testing data set (it contains 7846 observations, or about 40% of the entire training data set). The dataset TestSet will never be looked at, and will be used only for accuracy measurements.
+
+We can now identify the "zero covariates"" from TrainSet and remove these "zero covariates"" from both TrainSet and TestSet:
+```{r}
+# remove variables with Nearly Zero Variance
+NZV <- nearZeroVar(TrainSet)
+if(length(NZV) > 0) {
+  TrainSet <- TrainSet[, -NZV]
+  TestSet  <- TestSet[, -NZV]
+}
+dim(TrainSet)
+dim(TestSet)
+```
+
+This step didn't do anything as the earlier removal of NA was sufficient to clean the data. We are satisfied that we now have 53 clean covariates to build a model for *classe* (which is the 54th column of the data set).
+
+## Prediction Model Building
+We will apply three methods to create our prediction models using TrainSet dataset. The best one (with higher accuracy when applied to the TestSet dataset) will be used for the quiz predictions. The methods are: Random Forests, Decision Tree and Generalized Boosted Model.
+A Confusion Matrix is plotted at the end of each analysis to better visualize the accuracy of the models.
+
+### Random Forest Method
+```{r}
+# model fit
+set.seed(12345)
+controlRF <- trainControl(method="cv", number=2)
+modFitRF <- train(classe ~ ., data=TrainSet, method="rf", trControl=controlRF)
+modFitRF$finalModel
+
+# prediction on Test dataset
+predictRF <- predict(modFitRF, newdata=TestSet)
+confMatRF <- confusionMatrix(predictRF, TestSet$classe)
+confMatRF
+```
+
+### Decision Tree Method
+```{r}
+# model fit
+set.seed(12345)
+modFitDT <- rpart(classe ~ ., data=TrainSet, method="class")
+prp(modFitDT)
+
+# prediction on Test dataset
+predictDT <- predict(modFitDT, newdata=TestSet, type="class")
+confMatDT <- confusionMatrix(predictDT, TestSet$classe)
+confMatDT
+```
+
+### Generalized Boosted Model Method
+```{r}
+# model fit
+set.seed(12345)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitGBM  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+modFitGBM$finalModel
+
+# prediction on Test dataset
+predictGBM <- predict(modFitGBM, newdata=TestSet)
+confMatGBM <- confusionMatrix(predictGBM, TestSet$classe)
+confMatGBM
+```
+
+### Coursera Submission
+The accuracy of the 3 regression modeling methods above are:
+
+Random Forest : 0.9964
+Decision Tree : 0.7250
+GBM           : 0.9847
+In that case, the Random Forest model will be applied to predict the 20 quiz results (testing dataset) as shown below.
+```{r}
+predictTEST <- predict(modFitRF, newdata=testing)
+predictTEST
+```
+
+
+
+
